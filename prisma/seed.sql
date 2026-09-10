@@ -9,7 +9,7 @@
 
 do $$
 declare
-  v_email text := 'you@example.com';  -- <<< CHANGE THIS
+  v_email text := 'jatinguptaworks@gmail.com';
 
   v_you uuid;
   v_cohort uuid;
