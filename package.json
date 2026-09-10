@@ -9,7 +9,8 @@
     "start:prod": "node dist/main",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@nestjs/common": "10.4.4",
@@ -35,6 +36,7 @@
     "@types/node": "22.7.5",
     "@types/passport-jwt": "4.0.1",
     "prisma": "5.20.0",
+    "tsx": "^4.23.13",
     "typescript": "5.6.3"
   }
 }
