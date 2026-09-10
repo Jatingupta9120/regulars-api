@@ -1,0 +1,271 @@
+// Regulars — data model.
+//
+// Three rules this schema enforces structurally, because they are the ones that
+// matter if the product ever hurts someone:
+//   1. A removal is tied to a verified identity, not an email address.
+//   2. A check-in is immutable and never readable by other members.
+//   3. Cohort composition is recorded as promised, so a broken promise is a
+//      query rather than an argument.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  FAILED
+}
+
+enum CohortStatus {
+  FORMING // still filling seats
+  CONFIRMED // six paid members, dates locked
+  RUNNING // at least one session held
+  GRADUATED // handed off, we stop charging
+  CANCELLED // did not fill; everyone refunded
+}
+
+enum MemberStatus {
+  INVITED
+  PAID
+  ACTIVE
+  REMOVED
+  WITHDRAWN
+}
+
+enum AttendanceState {
+  EXPECTED
+  ATTENDED
+  LATE
+  CANCELLED
+  NO_SHOW
+}
+
+enum FlagSeverity {
+  CONCERN // noted, counts toward removal
+  SEVERE // immediate suspension, pages a human
+}
+
+enum Gender {
+  WOMAN
+  MAN
+  NONBINARY
+  UNDISCLOSED
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+
+  displayName String?
+  gender      Gender  @default(UNDISCLOSED)
+  ageBand     String? // "30-34"
+  neighborhood String?
+  market      String  @default("nyc")
+
+  // Push token for session reminders. Nothing else is ever sent here.
+  pushToken String?
+  reminderHour Int @default(9) // local hour for the day-of reminder
+  /// Reminders already delivered, so a restart never double-sends.
+  remindersSent Reminder[]
+
+  // Set when a removal is enforced. Blocks every future match.
+  suspendedAt     DateTime?
+  suspendedReason String?
+
+  verification Verification?
+  memberships  CohortMember[]
+  checkIns     CheckIn[]      @relation("CheckInAuthor")
+  flagsRaised  Flag[]         @relation("FlagReporter")
+  flagsAgainst Flag[]         @relation("FlagSubject")
+  attendance   Attendance[]
+  otpCodes     LoginCode[]
+
+  @@index([market, neighborhood, ageBand])
+}
+
+/// The identity binding. We never store the document itself — only the
+/// provider's decision and a reference, which is what lets a removal survive
+/// someone signing up again with a new address.
+model Verification {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  status       VerificationStatus @default(PENDING)
+  provider     String // "persona" | "stripe-identity"
+  referenceId  String // provider's inquiry id
+  documentType String? // "drivers_license" | "passport"
+  /// Provider-side hash of the identity document. Two accounts with the same
+  /// hash are the same human. This is the anti-evasion key.
+  identityHash String?
+  decidedAt    DateTime?
+  failureCode  String?
+  createdAt    DateTime           @default(now())
+
+  @@index([identityHash])
+}
+
+/// Short-lived email login code. No passwords anywhere in this system.
+model LoginCode {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  expiresAt DateTime
+  consumedAt DateTime?
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([userId, expiresAt])
+}
+
+model Cohort {
+  id     String       @id @default(uuid())
+  status CohortStatus @default(FORMING)
+  market String       @default("nyc")
+
+  neighborhood String
+  ageBand      String
+  /// What we promised before anyone paid. Compared against reality at confirm
+  /// time; if it does not hold, the cohort is cancelled rather than fudged.
+  promisedWomen Int
+  promisedSize  Int @default(6)
+  womenOnly     Boolean @default(false)
+
+  priceCents Int @default(14000)
+
+  createdAt   DateTime  @default(now())
+  confirmedAt DateTime?
+  graduatedAt DateTime?
+  /// Handed to members at graduation. We do not sit inside it.
+  groupChatUrl String?
+
+  members  CohortMember[]
+  sessions Session[]
+
+  @@index([status, neighborhood, ageBand])
+}
+
+model CohortMember {
+  id       String       @id @default(uuid())
+  cohortId String
+  cohort   Cohort       @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status   MemberStatus @default(INVITED)
+
+  paidAt     DateTime?
+  refundedAt DateTime?
+  /// Stripe Checkout session, so a webhook can find this row again.
+  checkoutRef String?
+  removedAt  DateTime?
+  joinedAt   DateTime @default(now())
+
+  @@unique([cohortId, userId])
+  @@index([userId, status])
+}
+
+model Session {
+  id       String @id @default(uuid())
+  cohortId String
+  cohort   Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+
+  weekNumber Int // 1..4
+  startsAt   DateTime
+  durationMinutes Int @default(120)
+
+  activity     String // "Pottery"
+  venueName    String
+  venueAddress String
+  /// The arriving-alone details. This is what stops a no-show.
+  nearestSubway String?
+  walkMinutes   Int?
+  doorNote      String?
+  whatToBring   String?
+
+  /// A paid facilitator attends week one.
+  hostName String?
+
+  checkIns   CheckIn[]
+  attendance Attendance[]
+
+  @@unique([cohortId, weekNumber])
+  @@index([startsAt])
+}
+
+/// One row per reminder actually delivered. Existence is the idempotency key:
+/// the scheduler will not send a second time for the same session and member.
+model Reminder {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId String
+  kind      String // "day_of" | "cohort_confirmed" | "group_change"
+  sentAt    DateTime @default(now())
+
+  @@unique([userId, sessionId, kind])
+}
+
+model Attendance {
+  id        String          @id @default(uuid())
+  sessionId String
+  session   Session         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  state     AttendanceState @default(EXPECTED)
+  noticeAt  DateTime?
+  note      String?
+
+  @@unique([sessionId, userId])
+}
+
+/// Private, immutable, and never visible to another member. There is no update
+/// or delete path for this model anywhere in the API.
+model CheckIn {
+  id        String   @id @default(uuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation("CheckInAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  enjoyed     Int // 1..5
+  wouldReturn Boolean
+  feltSafe    Boolean
+  /// "Did anyone treat this as a date?" — the enforcement behind the promise
+  /// that this is not a dating product.
+  romanticPressure Boolean @default(false)
+  note             String?
+
+  flags Flag[]
+
+  @@unique([sessionId, authorId])
+  @@index([createdAt])
+}
+
+/// A report against a specific person. Two CONCERN flags or one SEVERE flag
+/// suspends the subject immediately, before any human review.
+model Flag {
+  id         String       @id @default(uuid())
+  checkInId  String?
+  checkIn    CheckIn?     @relation(fields: [checkInId], references: [id], onDelete: SetNull)
+  reporterId String
+  reporter   User         @relation("FlagReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  subjectId  String
+  subject    User         @relation("FlagSubject", fields: [subjectId], references: [id], onDelete: Cascade)
+  severity   FlagSeverity
+  reason     String
+  createdAt  DateTime     @default(now())
+
+  reviewedAt   DateTime?
+  reviewedNote String?
+
+  @@index([subjectId, createdAt])
+}
