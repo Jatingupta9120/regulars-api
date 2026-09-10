@@ -9,11 +9,13 @@
 
 do $$
 declare
-  v_email text := 'jatinguptaworks@gmail.com';
+  v_email text := 'jatinguptaworks@gmail.com';  -- <<< CHANGE THIS
 
-  v_you uuid;
-  v_cohort uuid;
-  v_week1 uuid;
+  -- Every id is TEXT, not uuid: Prisma maps String @id @default(uuid()) to a
+  -- text column and generates the value client-side. Casting matters.
+  v_you text;
+  v_cohort text;
+  v_week1 text;
   v_mate record;
   v_session record;
 begin
@@ -30,7 +32,7 @@ begin
     ) as t(email, name, gender)
   loop
     insert into "User" (id, email, "displayName", gender, "ageBand", neighborhood, market)
-    values (gen_random_uuid(), v_mate.email, v_mate.name, v_mate.gender::"Gender",
+    values (gen_random_uuid()::text, v_mate.email, v_mate.name, v_mate.gender::"Gender",
             '30-34', 'greenpoint', 'nyc')
     on conflict (email) do update
       set "displayName" = excluded."displayName",
@@ -41,9 +43,9 @@ begin
     -- webhook and never by hand.
     insert into "Verification" (id, "userId", status, provider, "referenceId",
                                 "documentType", "identityHash", "decidedAt")
-    select gen_random_uuid(), u.id, 'APPROVED'::"VerificationStatus", 'seed',
-           'seed_' || left(u.id::text, 8), 'drivers_license',
-           'seedhash_' || left(u.id::text, 8), now()
+    select gen_random_uuid()::text, u.id, 'APPROVED'::"VerificationStatus", 'seed',
+           'seed_' || left(u.id, 8), 'drivers_license',
+           'seedhash_' || left(u.id, 8), now()
     from "User" u where u.email = v_mate.email
     on conflict ("userId") do update
       set status = 'APPROVED'::"VerificationStatus",
@@ -60,7 +62,7 @@ begin
   limit 1;
 
   if v_cohort is null then
-    v_cohort := gen_random_uuid();
+    v_cohort := gen_random_uuid()::text;
     insert into "Cohort" (id, status, market, neighborhood, "ageBand",
                           "promisedWomen", "promisedSize", "womenOnly",
                           "priceCents", "confirmedAt")
@@ -73,7 +75,7 @@ begin
   end if;
 
   insert into "CohortMember" (id, "cohortId", "userId", status, "paidAt")
-  select gen_random_uuid(), v_cohort, u.id, 'ACTIVE'::"MemberStatus", now()
+  select gen_random_uuid()::text, v_cohort, u.id, 'ACTIVE'::"MemberStatus", now()
   from "User" u
   where u.email in (v_email, 'nadia@example.com', 'sam@example.com',
                     'joon@example.com', 'tessa@example.com', 'ari@example.com')
@@ -111,7 +113,7 @@ begin
                            "durationMinutes", activity, "venueName", "venueAddress",
                            "nearestSubway", "walkMinutes", "doorNote",
                            "whatToBring", "hostName")
-    values (gen_random_uuid(), v_cohort, v_session.week,
+    values (gen_random_uuid()::text, v_cohort, v_session.week,
             date_trunc('day', now()) + (v_session.days || ' days')::interval + interval '19 hours',
             120, v_session.activity, v_session.venue, v_session.addr,
             v_session.subway, v_session.walk, v_session.door,
@@ -127,7 +129,7 @@ begin
 
   insert into "CheckIn" (id, "sessionId", "authorId", enjoyed, "wouldReturn",
                          "feltSafe", "romanticPressure", note)
-  values (gen_random_uuid(), v_week1, v_you, 4, true, true, false,
+  values (gen_random_uuid()::text, v_week1, v_you, 4, true, true, false,
           'Quieter than I expected, in a good way.')
   on conflict ("sessionId", "authorId") do nothing;
 
